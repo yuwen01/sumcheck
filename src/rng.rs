@@ -3,6 +3,7 @@ use ark_serialize::CanonicalSerialize;
 use ark_std::rand::RngCore;
 use ark_std::vec::Vec;
 use blake2::{Blake2s, Digest};
+// use merlin::{TranscriptRng, Transcript};
 /// Random Field Element Generator where randomness `feed` adds entropy for the output.
 ///
 /// Implementation should support all types of input that has `ToBytes` trait.
@@ -79,6 +80,21 @@ impl RngCore for Blake2s512Rng {
         Ok(())
     }
 }
+
+// impl FeedableRNG for TranscriptRng {
+//     type Error = crate::Error;
+
+//     fn setup() -> Self {
+//         Transcript::new(b"transcript").build_rng().finalize(&mut rand::thread_rng())
+//     }
+
+//     fn feed<M: CanonicalSerialize>(&mut self, msg: &M) -> Result<(), Self::Error> {
+//         let mut buf = Vec::new();
+//         msg.serialize_uncompressed(&mut buf)?;
+//         self.
+//         Ok(())
+//     }
+// }
 
 #[cfg(test)]
 mod tests {

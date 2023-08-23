@@ -118,6 +118,44 @@ fn test_polynomial_as_subprotocol(
     );
 }
 
+fn test_multi_degree_subprotocol(
+    nv: (usize, usize),
+    num_multiplicands_range: ((usize, usize), (usize, usize)),
+    num_products: (usize, usize),
+    prover_rng: &mut impl FeedableRNG<Error = crate::Error>,
+    verifier_rng: &mut impl FeedableRNG<Error = crate::Error>,
+) {
+    let mut rng = test_rng();
+    let (poly_0, asserted_sum_0) =
+        random_list_of_products::<Fr, _>(nv.0, num_multiplicands_range.0, num_products.0, &mut rng);
+    let poly_0_info = poly_0.info();
+    let (poly_1, asserted_sum_1) =
+        random_list_of_products::<Fr, _>(nv.1, num_multiplicands_range.1, num_products.1, &mut rng);
+    let poly_1_info = poly_1.info();
+    let (proofs, _prover_states) =
+        MLSumcheck::multi_degree_prove_as_subprotocol(prover_rng, &poly_0, &poly_1)
+            .expect("fail to prove");
+    let subclaim = MLSumcheck::multi_degree_verify_as_subprotocol(
+        verifier_rng,
+        (&poly_0_info, &poly_1_info),
+        asserted_sum_0 + asserted_sum_1,
+        (&proofs.0, &proofs.1),
+    )
+    .expect("fail to verify");
+
+    println!("subclaim nv {}, {:?}", subclaim.point.len(), nv);
+
+    println!(
+        "part 2 evaluation {:?}",
+        poly_1.evaluate(&subclaim.point[..poly_1.num_variables])
+    );
+    assert!(
+        poly_0.evaluate(&subclaim.point) + poly_1.evaluate(&subclaim.point[..poly_1.num_variables])
+            == subclaim.expected_evaluation,
+        "wrong subclaim"
+    );
+}
+
 #[test]
 fn test_trivial_polynomial() {
     let nv = 1;
@@ -162,6 +200,26 @@ fn test_normal_polynomial() {
             &mut prover_rng,
             &mut verifier_rng,
         )
+    }
+}
+#[test]
+fn test_multi_degree_polynomial() {
+    let nv = (12, 11);
+    let num_multiplicands_range = ((4, 9), (4, 9));
+    let num_products = (5, 3);
+
+    for _ in 0..10 {
+        let mut prover_rng = Blake2s512Rng::setup();
+        prover_rng.feed(b"Test Trivial Works").unwrap();
+        let mut verifier_rng = Blake2s512Rng::setup();
+        verifier_rng.feed(b"Test Trivial Works").unwrap();
+        test_multi_degree_subprotocol(
+            nv,
+            num_multiplicands_range,
+            num_products,
+            &mut prover_rng,
+            &mut verifier_rng,
+        );
     }
 }
 #[test]

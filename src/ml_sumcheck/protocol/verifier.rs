@@ -82,6 +82,55 @@ impl<F: Field> IPForMLSumcheck<F> {
         Some(msg)
     }
 
+    /// Run multi degree verifier at current round, given prover message
+    ///
+    /// Normally, this function should perform actual verification. Instead, `verify_round` only samples
+    /// and stores randomness and perform verifications altogether in `check_and_generate_subclaim` at
+    /// the last step.
+    pub fn multi_degree_verify_round<R: RngCore>(
+        prover_msgs: (ProverMsg<F>, ProverMsg<F>),
+        verifier_state: &mut (VerifierState<F>, VerifierState<F>),
+        rng: &mut R,
+    ) -> Option<VerifierMsg<F>> {
+        if verifier_state.0.finished || verifier_state.1.finished {
+            panic!("Incorrect verifier state: Verifier is already finished.");
+        }
+
+        // Now, verifier should check if the received P(0) + P(1) = expected. The check is moved to
+        // `check_and_generate_subclaim`, and will be done after the last round.
+
+        let msg = Self::sample_round(rng);
+        verifier_state.0.randomness.push(msg.randomness);
+        verifier_state
+            .0
+            .polynomials_received
+            .push(prover_msgs.0.evaluations);
+
+        verifier_state.1.randomness.push(msg.randomness);
+        verifier_state
+            .1
+            .polynomials_received
+            .push(prover_msgs.1.evaluations);
+
+        // Now, verifier should set `expected` to P(r).
+        // This operation is also moved to `check_and_generate_subclaim`,
+        // and will be done after the last round.
+
+        if verifier_state.0.round == verifier_state.0.nv {
+            // accept and close
+            verifier_state.0.finished = true;
+        } else {
+            verifier_state.0.round += 1;
+        }
+        if verifier_state.1.round == verifier_state.1.nv {
+            // accept and close
+            verifier_state.1.finished = true;
+        } else {
+            verifier_state.1.round += 1;
+        }
+        Some(msg)
+    }
+
     /// verify the sumcheck phase, and generate the subclaim
     ///
     /// If the asserted sum is correct, then the multilinear polynomial evaluated at `subclaim.point`
@@ -108,7 +157,7 @@ impl<F: Field> IPForMLSumcheck<F> {
             let p1 = evaluations[1];
             if p0 + p1 != expected {
                 return Err(crate::Error::Reject(Some(
-                    "Prover message is not consistent with the claim.".into(),
+                    format!("Prover message is not consistent with the claim. Error at round {}, got {:?}, expected {:?}", i, p0 + p1, expected).into(),
                 )));
             }
             expected = interpolate_uni_poly(evaluations, verifier_state.randomness[i]);
@@ -117,6 +166,73 @@ impl<F: Field> IPForMLSumcheck<F> {
         Ok(SubClaim {
             point: verifier_state.randomness,
             expected_evaluation: expected,
+        })
+    }
+
+    /// verify the sumcheck phase, and generate the subclaim
+    ///
+    /// If the asserted sum is correct, then the multilinear polynomial evaluated at `subclaim.point`
+    /// is `subclaim.expected_evaluation`. Otherwise, it is highly unlikely that those two will be equal.
+    /// Larger field size guarantees smaller soundness error.
+    pub fn multi_degree_check_and_generate_subclaim(
+        verifier_state: (VerifierState<F>, VerifierState<F>),
+        asserted_sum: F,
+    ) -> Result<SubClaim<F>, crate::Error> {
+        if !verifier_state.0.finished || !verifier_state.1.finished {
+            panic!("Verifier has not finished.");
+        }
+        let mut expected = asserted_sum;
+        if verifier_state.0.polynomials_received.len() != verifier_state.0.nv {
+            panic!("insufficient rounds");
+        }
+        if verifier_state.1.polynomials_received.len() != verifier_state.1.nv {
+            panic!("insufficient rounds");
+        }
+        for i in 0..verifier_state.1.nv {
+            let evaluations_0 = &verifier_state.0.polynomials_received[i];
+            if evaluations_0.len() != verifier_state.0.max_multiplicands + 1 {
+                panic!("incorrect number of evaluations");
+            }
+            let evaluations_1 = &verifier_state.1.polynomials_received[i];
+            if evaluations_1.len() != verifier_state.1.max_multiplicands + 1 {
+                panic!("incorrect number of evaluations");
+            }
+            let sum = evaluations_0[0] + evaluations_1[0] + evaluations_0[1] + evaluations_1[1];
+            if sum != expected {
+                return Err(crate::Error::Reject(Some(
+                    format!(
+                        "Prover message is not consistent with the claim. Error at round {}",
+                        i
+                    )
+                    .into(),
+                )));
+            }
+            expected = interpolate_uni_poly(evaluations_0, verifier_state.0.randomness[i])
+                + interpolate_uni_poly(evaluations_1, verifier_state.1.randomness[i]);
+        }
+        // modify expected here i forget how
+        let c = interpolate_uni_poly(
+            &verifier_state.1.polynomials_received[verifier_state.1.nv - 1],
+            verifier_state.1.randomness[verifier_state.1.nv - 1],
+        );
+        expected -= c;
+        for i in verifier_state.1.nv..verifier_state.0.nv {
+            let evaluations_0 = &verifier_state.0.polynomials_received[i];
+            if evaluations_0.len() != verifier_state.0.max_multiplicands + 1 {
+                panic!("incorrect number of evaluations");
+            }
+            let sum = evaluations_0[0] + evaluations_0[1];
+            if sum != expected {
+                return Err(crate::Error::Reject(Some(
+                    format!("Prover message is not consistent with the claim. Error at round {}, got {:?}, expected {:?}", i, sum, expected).into(),
+                )));
+            }
+            expected = interpolate_uni_poly(evaluations_0, verifier_state.0.randomness[i]);
+        }
+
+        Ok(SubClaim {
+            point: verifier_state.0.randomness,
+            expected_evaluation: expected + c,
         })
     }
 
